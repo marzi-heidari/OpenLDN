@@ -23,8 +23,8 @@ def pseudo_labeling(args, data_loader, model, novel_classes, no_pl_perclass):
 
     with torch.no_grad():
         for batch_idx, (inputs, targets, indexs) in enumerate(data_loader):
-            inputs = inputs.cuda()
-            targets = targets.cuda()
+            inputs = inputs.cuda(args.gpu)
+            targets = targets.cuda(args.gpu)
             outputs = model(inputs)
             out_prob = F.softmax(outputs, dim=1)
             max_value, max_idx = torch.max(out_prob, dim=1)

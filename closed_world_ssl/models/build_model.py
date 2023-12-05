@@ -18,7 +18,7 @@ def build_model(args, ema=False):
     if torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
 
-    model = model.cuda()
+    model = model.cuda(args.gpu)
 
     if ema:
         for param in model.parameters():

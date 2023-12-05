@@ -258,9 +258,9 @@ def train(args, labeled_trainloader, unlabeled_trainloader, model, optimizer, em
         targets_x = torch.zeros(batch_size, args.no_class).scatter_(1, targets_x.view(-1,1).long(), 1)
 
         if use_cuda:
-            inputs_x, targets_x = inputs_x.cuda(), targets_x.cuda(non_blocking=True)
-            inputs_u = inputs_u.cuda()
-            inputs_u2 = inputs_u2.cuda()
+            inputs_x, targets_x = inputs_x.cuda(args.gpu), targets_x.cuda(non_blocking=True)
+            inputs_u = inputs_u.cuda(args.gpu)
+            inputs_u2 = inputs_u2.cuda(args.gpu)
 
         with torch.no_grad():
             # compute guessed labels of unlabel samples
@@ -352,8 +352,8 @@ def test_known(args, test_loader, model, epoch):
 
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(test_loader):
-            inputs = inputs.cuda()
-            targets = targets.cuda()
+            inputs = inputs.cuda(args.gpu)
+            targets = targets.cuda(args.gpu)
             outputs = model(inputs)
             loss = F.cross_entropy(outputs, targets)
             prec1, prec5 = accuracy(outputs, targets, topk=(1, 5))
@@ -394,8 +394,8 @@ def test_cluster(args, test_loader, model, epoch, offset=0):
         for batch_idx, (inputs, targets) in enumerate(test_loader):
             data_time.update(time.time() - end)
 
-            inputs = inputs.cuda()
-            targets = targets.cuda()
+            inputs = inputs.cuda(args.gpu)
+            targets = targets.cuda(args.gpu)
             outputs = model(inputs)
             _, max_idx = torch.max(outputs, dim=1)
             predictions.extend(max_idx.cpu().numpy().tolist())
