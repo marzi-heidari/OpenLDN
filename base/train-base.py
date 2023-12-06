@@ -11,7 +11,7 @@ from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm
 
-from base.losses.losses import symmetric_mse_loss
+from base.losses.losses import symmetric_mse_loss, entropy
 from base.utils.utils_u import sampling
 from base.utils.utils_u.utils import AverageMeter, accuracy, set_seed, save_checkpoint, sim_matrix
 from datasets.datasets import get_dataset
@@ -123,8 +123,8 @@ def main():
                           num_frequencies=128,
                           n_embd=args.no_class,
                           encoder_depth=1,
-                          n_layer=12,
-                          n_head=10,
+                          n_layer=1,
+                          n_head=1,
                           len_input=3,
                           attn_pdrop=0.1,
                           resid_pdrop=0.1,
@@ -135,10 +135,9 @@ def main():
 
     ema_helper = ema.EMAHelper(mu=0.9999)
     ema_helper.register(diffusion_model)
-    optimizer_diffusion = None
     optimizer_diffusion, lr_scheduler_diffusion = utils_u.make_optimizer(
         diffusion_model.parameters(),
-        'sgd', lr=1.e-3, weight_decay=5.e-4, milestones=[30, 50, 80])
+        'adam', lr=1.e-3, weight_decay=5.e-4, milestones=[30, 50, 80])
     model = model.cuda(args.gpu)
     diffusion_model.cuda(args.gpu)
     # simnet = simnet.cuda(args.gpu)
@@ -169,7 +168,7 @@ def main():
     diffusion_model.zero_grad()
     for epoch in range(start_epoch, args.epochs):
         train_loss = train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, optimizer_diffusion,
-                           epoch, diffusion, timestep_sampler, ema_helper,lr_scheduler_diffusion)
+                           epoch, diffusion, timestep_sampler, ema_helper, lr_scheduler_diffusion)
 
         test_acc_known = test_known(args, test_loader_known, model, epoch,
                                     diffusion_model=diffusion_model, timestep_sampler=timestep_sampler,
@@ -239,30 +238,36 @@ def main():
         ofile.write(f'acc-pl: {pl_acc}, total-selected: {pl_no}\n')
 
 
-def compute_unsup_loss(denoised_soft_labels, logits_x_ulb_s, gpu):
-    # Step 1: Compute the confidence scores
+def compute_unsup_loss(denoised_soft_labels, logits_x_ulb_s,gpu):
+    # Convert logits to probabilities
+    probs = F.softmax(logits_x_ulb_s, dim=1)
 
-    confidence_scores = denoised_soft_labels.max(dim=1)[0]
+    # Find the pseudo-labels and their confidence
+    pseudo_labels = torch.argmax(denoised_soft_labels, dim=1)
+    max_probs, _ = torch.max(probs, dim=1)
 
-    # Step 2: Create a binary mask for confidant examples
-    confidence_threshold = 0.5  # Set your confidence threshold here
-    confidant_mask = confidence_scores > confidence_threshold
+    # Select samples where the confidence is above the threshold
+    confident_samples = max_probs > 0.0
+    confident_labels = pseudo_labels[confident_samples]
 
-    # Check if there are any confidant examples
-    if confidant_mask.sum() == 0:
-        unsup_loss = torch.tensor(0.0).cuda(
-            gpu)  # or you can set a default loss value if no confidant examples are found
-    else:
-        # Step 3: Use the mask to filter out non-confidant examples and compute the loss
+    # Balance the set
+    unique_labels, counts = confident_labels.unique(return_counts=True)
+    if len(unique_labels) == 0:
+        print(0)
+        return torch.tensor(0.0).cuda(gpu)
 
-        _, confidant_logits_s = torch.max(F.softmax(logits_x_ulb_s[confidant_mask], dim=1),dim=1)
-        confidant_labels = denoised_soft_labels[confidant_mask]
+    min_samples = counts.min()
 
-        unsup_loss = F.cross_entropy(confidant_labels, confidant_logits_s)
-        # -torch.sum(
-        #     confidant_labels * torch.log(F.softmax(confidant_logits_s, dim=1))) / confidant_labels.size(0)
-        # F.cross_entropy(confidant_logits_s, confidant_labels, reduction='mean')
-    return unsup_loss
+    balanced_indices = torch.cat(
+        [confident_samples.nonzero()[confident_labels == label][:min_samples] for label in unique_labels])
+
+    # Compute loss only on the balanced subset
+    balanced_logits = logits_x_ulb_s[balanced_indices.squeeze(1)]
+    balanced_labels = pseudo_labels[balanced_indices.squeeze(1)]
+
+    # Assuming a standard cross-entropy loss for simplicity
+    loss = F.cross_entropy(balanced_logits, balanced_labels)
+    return loss
 
 
 def compute_context_vector(x_u, pseudo_labels, k, tau):
@@ -298,7 +303,7 @@ def compute_context_vector(x_u, pseudo_labels, k, tau):
 
 
 def train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, optimizer_diffusion, epoch, diffusion=None,
-          timestep_sampler=None, ema_helper=None,lr_scheduler_diffusion=None):
+          timestep_sampler=None, ema_helper=None, lr_scheduler_diffusion=None):
     batch_time = AverageMeter()
     losses = AverageMeter()
     losses_ce = AverageMeter()
@@ -324,9 +329,8 @@ def train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, opt
         # Compute context vectors for unlabeled data
         pseudo = F.softmax(logits_x_ulb_w, dim=1)
         pseudo_labels = pseudo
-        one_hot_y = F.one_hot(y_lb, num_classes=args.no_class).to(torch.float32)
         y_c_u = compute_context_vector(feats_x_ulb_w, logits_x_ulb_w, 5, 0.9)
-        y_c_l = compute_context_vector(feats_x_ulb_w, logits_x_lb, 5, 0.9)
+        y_c_l = compute_context_vector(feats_x_lb, logits_x_lb, 5, 0.9)
 
         t, vlb_weights = timestep_sampler.sample(pseudo_labels.shape[0], args.gpu)
         t = t.cuda(args.gpu)
@@ -340,13 +344,10 @@ def train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, opt
         labels_denoised_labeld = F.softmax(logits_x_ulb_w - denoised_labeld[:, 0, :], dim=1)
         sup_loss = F.cross_entropy(logits_x_lb - denoised_labeld_[:, 0, :], y_lb.cuda(args.gpu), reduction='mean')
 
-        # unsup_loss = F.cross_entropy(F.softmax(logits_x_ulb_s, dim=1), labels_denoised_labeld,
-        #                         reduction='mean')
-        # Calculate the norm of the predicted noise
 
-        unsup_loss = compute_unsup_loss(labels_denoised_labeld, logits_x_ulb_s, args.gpu)
+        unsup_loss = compute_unsup_loss(labels_denoised_labeld, logits_x_ulb_s,args.gpu)
         wormup = np.clip(epoch / (0.1 * args.epochs), a_min=0.0, a_max=1.0)
-        total_loss = sup_loss + torch.mean(diffusion_loss) + wormup * unsup_loss + torch.mean(diffusion_loss_)
+        total_loss = sup_loss + torch.mean(diffusion_loss) + unsup_loss + torch.mean(diffusion_loss_)
 
         # inputs_l, y_lb, _ = data_lbl
         # (inputs_u_w, inputs_u_s), _, _ = data_unlbl
@@ -382,10 +383,10 @@ def train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, opt
         # sim_feat = simnet(feat_pairs).view(-1,feats.shape[0])
         #
         class_logit = torch.cat((logits_x_lb, logits_x_ulb_w), 0)
-        sim_prob = sim_matrix(F.softmax(class_logit, dim=1), F.softmax(class_logit, dim=1), args)
+        # sim_prob = sim_matrix(F.softmax(class_logit, dim=1), F.softmax(class_logit, dim=1), args)
         #
-        loss_pair = symmetric_mse_loss(sim_prob.view(-1), sim_prob.view(-1)) / sim_prob.view(-1).view(-1).shape[0]
-        # loss_reg = entropy(torch.mean(F.softmax(class_logit, dim=1), 0), input_as_probabilities = True)
+        # loss_pair = symmetric_mse_loss(sim_prob.view(-1), sim_prob.view(-1)) / sim_prob.view(-1).view(-1).shape[0]
+        loss_reg = entropy(torch.mean(F.softmax(class_logit, dim=1), 0), input_as_probabilities=True)
         # loss_ce_supervised = F.cross_entropy(class_logit[:batch_l[0]], y_lb)
         # loss_ce_pseudo = (F.cross_entropy(logits_x_ulb_s, targets_u_pl, reduction='none') * mask_pl).mean()
         # loss_ce = loss_ce_supervised + loss_ce_pseudo
@@ -449,7 +450,7 @@ def train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, opt
         # loss_ce = loss_ce_supervised + loss_ce_pseudo
         #
         # final_loss = loss_pair - loss_reg + loss_ce
-        final_loss = total_loss + loss_pair
+        final_loss = total_loss-loss_reg
         losses.update(final_loss.item(), inputs_l.size(0))
         losses_ce.update(sup_loss.item(), inputs_l.size(0))
         losses_pair.update(diffusion_loss_.mean().item(), inputs_l.size(0))
