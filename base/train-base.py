@@ -43,6 +43,8 @@ def main():
     parser.add_argument('--threshold', default=0.5, type=float, help='pseudo-label threshold, default 0.50')
     parser.add_argument('--split-id', default='split_0', type=str, help='random data split number')
     parser.add_argument('--ssl-indexes', default='', type=str, help='path to random data split')
+    parser.add_argument('--pre', default='pretrained/simclr_cifar_10.pth.tar', type=str,
+                        help='closed-world SSL method to use')
 
     args = parser.parse_args()
     best_acc = 0
@@ -115,6 +117,18 @@ def main():
         optimizer_simnet = torch.optim.Adam(simnet.params(), lr=args.lr_simnet)
 
     start_epoch = 0
+    args.out = os.path.dirname(args.pre)
+    checkpoint = torch.load(args.pre)
+    # best_acc = checkpoint['best_acc']
+    # start_epoch = checkpoint['epoch']
+    # print(checkpoint)
+    new_state_dict = {}
+    for key, value in checkpoint.items():
+        if 'contrastive_head' not in key:
+            new_key = f'module.{key}'  # Add 'module.' prefix
+            new_state_dict[new_key] = value
+    model.load_state_dict(new_state_dict,strict=False)
+
     if args.resume:
         assert os.path.isfile(
             args.resume), "Error: no checkpoint directory found!"
