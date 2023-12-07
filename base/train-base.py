@@ -163,7 +163,7 @@ def main():
         if 'contrastive_head' not in key:
             new_key = f'module.{key}'  # Add 'module.' prefix
             new_state_dict[new_key] = value
-    model.load_state_dict(new_state_dict,strict=False)
+    model.load_state_dict(new_state_dict, strict=False)
 
     if args.resume:
         assert os.path.isfile(
@@ -252,7 +252,7 @@ def main():
         ofile.write(f'acc-pl: {pl_acc}, total-selected: {pl_no}\n')
 
 
-def compute_unsup_loss(denoised_soft_labels, logits_x_ulb_s,gpu):
+def compute_unsup_loss(denoised_soft_labels, logits_x_ulb_s, gpu):
     # Convert logits to probabilities
     probs = F.softmax(logits_x_ulb_s, dim=1)
 
@@ -349,19 +349,20 @@ def train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, opt
         t, vlb_weights = timestep_sampler.sample(pseudo_labels.shape[0], args.gpu)
         t = t.cuda(args.gpu)
 
-        diffusion_loss, denoised_labeld = diffusion.training_losses(diffusion_model,
-                                                                    logits_x_ulb_w, y_c_u, t)
+        # diffusion_loss, denoised_labeld = diffusion.training_losses(diffusion_model,
+        #                                                             logits_x_ulb_w, y_c_u, t)
 
         diffusion_loss_, denoised_labeld_ = diffusion.training_losses(diffusion_model,
                                                                       logits_x_lb, y_c_l, t)
+        p_sample = diffusion.p_sample(diffusion_model, logits_x_ulb_w,
+                                      torch.ones(pseudo_labels.shape[0]).cuda(args.gpu))
         # Compute total loss and backpropagate
-        labels_denoised_labeld = F.softmax(logits_x_ulb_w - denoised_labeld[:, 0, :], dim=1)
+        labels_denoised_labeld = F.softmax(p_sample["pred_xstart"], dim=1)
         sup_loss = F.cross_entropy(logits_x_lb - denoised_labeld_[:, 0, :], y_lb.cuda(args.gpu), reduction='mean')
 
-
-        unsup_loss = compute_unsup_loss(labels_denoised_labeld, logits_x_ulb_s,args.gpu)
+        unsup_loss = compute_unsup_loss(labels_denoised_labeld, logits_x_ulb_s, args.gpu)
         wormup = np.clip(epoch / (0.1 * args.epochs), a_min=0.0, a_max=1.0)
-        total_loss = sup_loss + torch.mean(diffusion_loss) + unsup_loss + torch.mean(diffusion_loss_)
+        total_loss = sup_loss + unsup_loss + torch.mean(diffusion_loss_)
 
         # inputs_l, y_lb, _ = data_lbl
         # (inputs_u_w, inputs_u_s), _, _ = data_unlbl
@@ -464,7 +465,7 @@ def train(args, lbl_loader, unlbl_loader, model, optimizer, diffusion_model, opt
         # loss_ce = loss_ce_supervised + loss_ce_pseudo
         #
         # final_loss = loss_pair - loss_reg + loss_ce
-        final_loss = total_loss-loss_reg
+        final_loss = total_loss - loss_reg
         losses.update(final_loss.item(), inputs_l.size(0))
         losses_ce.update(sup_loss.item(), inputs_l.size(0))
         losses_pair.update(diffusion_loss_.mean().item(), inputs_l.size(0))
@@ -520,14 +521,14 @@ def test_known(args, test_loader, model, epoch, diffusion_model=None, diffusion=
             inputs = inputs.cuda(args.gpu)
             targets = targets.cuda(args.gpu)
             _, outputs = model(inputs)
-            y_c_u = sampling.generalized_steps(diffusion_model, F.softmax(outputs, dim=1),
-                                               100)
-            t, vlb_weights = timestep_sampler.sample(outputs.shape[0], args.gpu)
+            # y_c_u = sampling.generalized_steps(diffusion_model, F.softmax(outputs, dim=1),
+            #                                    100)
+            t= torch.ones(outputs.shape[0]).cuda(args.gpu)
             t = t.cuda(args.gpu)
-            diffusion_loss, denoised_labeld = diffusion.training_losses(diffusion_model,
-                                                                        outputs, F.softmax(y_c_u, dim=1), t)
+            denoised_labeld = diffusion.p_sample(diffusion_model,
+                                                 outputs, F.softmax(outputs, dim=1), t)
 
-            outputs = outputs - denoised_labeld[:, 0, :]
+            outputs = denoised_labeld["pred_xstart"]
             loss = F.cross_entropy(outputs, targets)
             prec1, prec5 = accuracy(outputs, targets, topk=(1, 5))
             losses.update(loss.item(), inputs.shape[0])
@@ -573,14 +574,14 @@ def test_cluster(args, test_loader, model, epoch, offset=0, diffusion_model=None
             targets = targets.cuda(args.gpu)
 
             _, outputs = model(inputs)
-            y_c_u = sampling.generalized_steps(diffusion_model, F.softmax(outputs, dim=1),
-                                               100)
-            t, vlb_weights = timestep_sampler.sample(outputs.shape[0], args.gpu)
+            # y_c_u = sampling.generalized_steps(diffusion_model, F.softmax(outputs, dim=1),
+            #                                    100)
+            t= torch.ones(outputs.shape[0]).cuda(args.gpu)
             t = t.cuda(args.gpu)
-            diffusion_loss, denoised_labeld = diffusion.training_losses(diffusion_model,
-                                                                        outputs, F.softmax(y_c_u, dim=1), t)
+            denoised_labeld = diffusion.p_sample(diffusion_model,
+                                                                        outputs, F.softmax(outputs, dim=1), t)
 
-        outputs = outputs - denoised_labeld[:, 0, :]
+        outputs = denoised_labeld["pred_xstart"]
         _, max_idx = torch.max(outputs, dim=1)
         predictions.extend(max_idx.cpu().numpy().tolist())
         gt_targets.extend(targets.cpu().numpy().tolist())
