@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from .evaluate_utils import hungarian_evaluate
-from base.utils.utils_u.utils import AverageMeter
+from .utils import AverageMeter
 
 
 

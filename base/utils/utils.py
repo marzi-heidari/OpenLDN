@@ -3,7 +3,8 @@ import torch
 import numpy as np
 import random
 import shutil
-
+import torch.nn as nn
+import torch.nn.functional as F
 
 class AverageMeter(object):
     """Computes and stores the average and current value
@@ -65,6 +66,21 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
+class MarginLoss(nn.Module):
+
+    def __init__(self, m=0.2, weight=None, s=10):
+        super(MarginLoss, self).__init__()
+        self.m = m
+        self.s = s
+        self.weight = weight
+
+    def forward(self, x, target):
+        index = torch.zeros_like(x, dtype=torch.uint8)
+        index.scatter_(1, target.data.view(-1, 1), 1)
+        x_m = x - self.m * self.s
+
+        output = torch.where(index, x_m, x)
+        return F.cross_entropy(output, target, weight=self.weight)
 def sim_matrix(a, b, args, eps=1e-8):
     """
     added eps for numerical stability

@@ -71,7 +71,7 @@ def get_cifar10(args):
             assert len(train_labeled_idxs) == len(train_unlabeled_idxs)
 
     # generate datasets
-    train_labeled_dataset = CIFAR10SSL(args.data_root, train_labeled_idxs, train=True, transform=transform_labeled)
+    train_labeled_dataset = CIFAR10SSL(args.data_root, train_labeled_idxs, train=True, transform=TransformWS32(mean=cifar10_mean, std=cifar10_std))
     train_unlabeled_dataset = CIFAR10SSL(args.data_root, train_unlabeled_idxs, train=True, transform=TransformWS32(mean=cifar10_mean, std=cifar10_std))
     train_pl_dataset = CIFAR10SSL(args.data_root, train_unlabeled_idxs, train=True, transform=transform_val)
     test_dataset_known = CIFAR10SSL_TEST(args.data_root, train=False, transform=transform_val, download=False, labeled_set=list(range(0,args.no_known)))
@@ -321,7 +321,7 @@ class TransformWS32(object):
             transforms.RandomCrop(size=32,
                                   padding=int(32*0.125),
                                   padding_mode='reflect'),
-            RandAugmentMC(n=2, m=10)])
+            ])
         self.normalize = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std)])

@@ -252,11 +252,6 @@ class CIFAR10SSL(datasets.CIFAR10):
                          download=download)
 
         self.targets = np.array(self.targets)
-
-        # replace ground-truth with pseudo-labels
-        if pseudo_idxs is not None:
-            self.targets[pseudo_idxs] = pseudo_targets
-
         if indexs is not None:
             indexs = np.array(indexs)
             self.data = self.data[indexs]

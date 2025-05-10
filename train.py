@@ -20,7 +20,7 @@ def main(run_started, split_id):
     parser.add_argument('--arch', default='resnet18', type=str, help='model architecture')
     parser.add_argument('--cw-ssl', default='mixmatch', type=str, choices=['mixmatch', 'uda'], help='closed-world SSL method to use')
     parser.add_argument('--description', default='default_run', type=str, help='description of the experiment')
-
+    # parser.add_argument('--gpu', default=0, type=int, help='total classes')
     args = parser.parse_args()
     args.split_id = split_id
     args.data_root = os.path.join(args.data_root, args.dataset)

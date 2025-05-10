@@ -12,6 +12,7 @@ def entropy(x, input_as_probabilities):
 
     if input_as_probabilities:
         x_ =  torch.clamp(x, min = 1e-8)
+
         b =  x_ * torch.log(x_)
     else:
         b = F.softmax(x, dim = 1) * F.log_softmax(x, dim = 1)
